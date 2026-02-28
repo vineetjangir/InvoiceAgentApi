@@ -19,8 +19,12 @@ language conversation.
 
 Supported invoice operations:
   - Creating a new invoice
-  - Searching for an invoice by name
+  - Searching for an invoice by name/description
   - Marking an invoice as paid
+  - Listing all invoices
+
+The agent communicates with a backend Invoice API (http://localhost:5000)
+to retrieve and query invoice data.
 
 ================================================================================
 2. KEY FEATURES
@@ -57,6 +61,8 @@ Supported invoice operations:
     The SystemPrompt.txt file is loaded once at startup from the output
     directory. On every /chat request, the current date/time is appended
     to the system prompt so the AI agent is always aware of today's date.
+    The prompt also instructs the agent to use available tools to read
+    invoice data.
 
   * Function Invocation Pipeline
     ---------------------------------------------------------
@@ -66,13 +72,43 @@ Supported invoice operations:
     This allows the AI agent to call registered tools/functions automatically
     during a conversation, enabling agentic behavior.
 
-  * Tool / Function Registry
+  * Tool / Function Registry (AI Function Calling)
     ---------------------------------------------------------
-    FunctionRegistry.cs provides an extensible mechanism to register AI tools
-    (AITool instances) that the agent can invoke. Tools are injected into
-    ChatOptions and made available to the AI model during each conversation
-    turn. Currently the registry yields no tools (yield break) and is ready
-    for extension.
+    FunctionRegistry.cs registers AI tools that the agent can invoke
+    during a conversation. Two tools are currently registered:
+
+      1. list_invoices
+         - Retrieves a list of all invoices in the system.
+         - Backed by InvoiceApiService.GetInvoicesAsync()
+
+      2. find_invoice_by_name
+         - Finds an invoice matching the given name/description.
+         - Backed by InvoiceApiService.GetInvoiceByNameAsync(string)
+
+    Tools are created via AIFunctionFactory.Create() using reflection
+    on InvoiceApiService methods and are automatically injected into
+    ChatOptions for the AI model to call.
+
+  * Invoice Data Model
+    ---------------------------------------------------------
+    The Invoice model (InvoiceAppAI.Model.Invoice) represents an
+    invoice entity with the following properties:
+      - Id          (int)       - Unique identifier
+      - Description (string)    - Invoice description / name
+      - Amount      (decimal)   - Invoice amount
+      - Date        (DateTime)  - Invoice creation date
+      - Status      (string)    - e.g., "Paid", "Unpaid", "Overdue"
+      - Due         (DateTime)  - Payment due date
+
+  * Invoice API Service
+    ---------------------------------------------------------
+    InvoiceApiService (InvoiceAgentApi.Services) is an HTTP client
+    service that communicates with the backend Invoice API at
+    http://localhost:5000/api/invoices. It provides:
+      - GetInvoicesAsync()              : GET all invoices
+      - GetInvoiceByNameAsync(string)   : GET invoice by description
+    Uses System.Text.Json with camelCase naming policy for
+    serialization/deserialization.
 
   * CORS Policy for Local Development
     ---------------------------------------------------------
@@ -89,7 +125,40 @@ Supported invoice operations:
       - CLAUDE_API_KEY
 
 ================================================================================
-3. PROJECT STRUCTURE
+3. ARCHITECTURE
+================================================================================
+
+  ┌─────────────┐      POST /chat      ┌──────────────────┐
+  │  Front-End  │ ───────────────────>  │  InvoiceAgentApi │
+  │  Client     │ <───────────────────  │  (port 5001)     │
+  └─────────────┘    AI Response        │                  │
+                                        │  IChatClient     │
+                                        │    ├ OpenAI      │
+                                        │    ├ Gemini      │
+                                        │    └ Claude      │
+                                        │                  │
+                                        │  FunctionRegistry│
+                                        │    ├ list_invoices
+                                        │    └ find_invoice_by_name
+                                        └───────┬──────────┘
+                                                │ HTTP
+                                                v
+                                        ┌──────────────────┐
+                                        │  Invoice API     │
+                                        │  (port 5000)     │
+                                        │  /api/invoices   │
+                                        └──────────────────┘
+
+  Flow:
+  1. Client sends conversation history to POST /chat.
+  2. InvoiceAgentApi prepends system prompt and forwards to AI provider.
+  3. AI provider may invoke registered tools (list_invoices,
+     find_invoice_by_name) which call the backend Invoice API.
+  4. Tool results are fed back to the AI to compose a final response.
+  5. The response is returned to the client.
+
+================================================================================
+4. PROJECT STRUCTURE
 ================================================================================
 
   InvoiceAgentApi/
@@ -105,10 +174,23 @@ Supported invoice operations:
   |                               Configures logging, builds the chat client
   |                               pipeline with logging and function invocation
   |                               middleware. Registers ChatOptions with tools.
+  |                               Registers InvoiceApiService as a singleton.
   |
-  |-- FunctionRegistry.cs         Static class exposing GetTools() to provide
-  |                               AI tools to the chat pipeline. Extensible
-  |                               via yield return of AITool instances.
+  |-- FunctionRegistry.cs         Static class exposing GetTools() to register
+  |                               AI tools backed by InvoiceApiService methods.
+  |                               Currently registers: list_invoices and
+  |                               find_invoice_by_name.
+  |
+  |-- Model/
+  |   |-- Invoice.cs              Data model representing an invoice entity
+  |                               with Id, Description, Amount, Date, Status,
+  |                               and Due properties.
+  |
+  |-- Services/
+  |   |-- InvoiceApiService.cs    HTTP client service that communicates with
+  |                               the backend Invoice API at localhost:5000.
+  |                               Provides GetInvoicesAsync() and
+  |                               GetInvoiceByNameAsync(string) methods.
   |
   |-- SystemPrompt.txt            Plain-text system prompt loaded at runtime
   |                               to define the agent's instructions and role.
@@ -122,9 +204,11 @@ Supported invoice operations:
   |
   |-- .env                        (User-created) Environment variables file
   |                               containing API keys. Not committed to source.
+  |
+  |-- ReadMe.txt                  This file.
 
 ================================================================================
-4. NUGET PACKAGES
+5. NUGET PACKAGES
 ================================================================================
 
   Package                                Version     Purpose
@@ -136,7 +220,7 @@ Supported invoice operations:
   dotenv.net                             4.0.1       .env file loading
 
 ================================================================================
-5. PREREQUISITES
+6. PREREQUISITES
 ================================================================================
 
   - .NET 8 SDK
@@ -147,24 +231,31 @@ Supported invoice operations:
       GEMINI_API_KEY=your-gemini-key
       CLAUDE_API_KEY=your-claude-key
 
+  - Backend Invoice API running at http://localhost:5000
+    (required for the AI tools to retrieve invoice data)
+
 ================================================================================
-6. HOW TO RUN
+7. HOW TO RUN
 ================================================================================
 
-  a) Default (OpenAI with gpt-4.1-mini):
-     -----------------------------------
-     dotnet run --project InvoiceAgentApi
+  1. Start the backend Invoice API on port 5000.
 
-  b) Specify a provider and model via CLI:
-     -----------------------------------
-     dotnet run --project InvoiceAgentApi -- --provider gemini --model gemini-pro
-     dotnet run --project InvoiceAgentApi -- --provider claude --model claude-3-sonnet
-     dotnet run --project InvoiceAgentApi -- --provider openai --model gpt-4o
+  2. Run InvoiceAgentApi:
+
+     a) Default (OpenAI with gpt-4.1-mini):
+        -----------------------------------
+        dotnet run --project InvoiceAgentApi
+
+     b) Specify a provider and model via CLI:
+        -----------------------------------
+        dotnet run --project InvoiceAgentApi -- --provider gemini --model gemini-pro
+        dotnet run --project InvoiceAgentApi -- --provider claude --model claude-3-sonnet
+        dotnet run --project InvoiceAgentApi -- --provider openai --model gpt-4o
 
   The API listens on port 5001 (all interfaces) by default.
 
 ================================================================================
-7. API ENDPOINTS
+8. API ENDPOINTS
 ================================================================================
 
   POST /chat
@@ -175,50 +266,91 @@ Supported invoice operations:
       1. The system prompt from SystemPrompt.txt is prepended as the first
          message with the current date/time appended.
       2. The full message list is sent to the configured AI provider.
-      3. The AI response is returned as a 200 OK JSON result.
+      3. The AI may invoke registered tools (list_invoices,
+         find_invoice_by_name) to fetch data from the backend Invoice API.
+      4. The AI response is returned as a 200 OK JSON result.
   Example     :
       POST http://localhost:5001/chat
       Content-Type: application/json
 
       [
-        { "role": "user", "content": "Create an invoice for John Doe" }
+        { "role": "user", "content": "Show me all invoices" }
       ]
 
 ================================================================================
-8. CONFIGURATION DETAILS
+9. REGISTERED AI TOOLS
+================================================================================
+
+  Tool Name              Method                              Description
+  ---------------------  ----------------------------------  ----------------------
+  list_invoices          InvoiceApiService.GetInvoicesAsync   Retrieves all invoices
+  find_invoice_by_name   InvoiceApiService.GetInvoiceByName   Finds invoice by name
+                         Async(string)
+
+  These tools are resolved from FunctionRegistry.GetTools() and injected
+  into ChatOptions. The AI model can call them automatically during a
+  conversation when it determines the user's intent matches a tool.
+
+================================================================================
+10. CONFIGURATION DETAILS
 ================================================================================
 
   * Kestrel is configured to listen on 0.0.0.0:5001.
+  * Backend Invoice API is expected at http://localhost:5000/api/invoices.
   * CORS allows any header and method from localhost origins.
   * ChatOptions are configured with:
       - Temperature : 1
       - MaxOutputTokens : 5000
   * Logging is set to Information level with Console output.
   * System prompt is loaded once from SystemPrompt.txt at app startup.
+  * InvoiceApiService is registered as a singleton in DI.
 
 ================================================================================
-9. EXTENDING THE AGENT WITH TOOLS
+11. EXTENDING THE AGENT WITH TOOLS
 ================================================================================
 
   To add new tools the agent can invoke during conversation:
 
-  1. Open FunctionRegistry.cs
-  2. Inside GetTools(), yield return new AITool instances. Example:
+  1. Add a new method to InvoiceApiService (or create a new service).
+  2. Register the service in Startup.ConfigureServices if new.
+  3. Open FunctionRegistry.cs and yield return a new AITool:
 
-       public static IEnumerable<AITool> GetTools(this IServiceProvider sp)
-       {
-           yield return AIFunctionFactory.Create(
-               (string customerName) => { /* create invoice logic */ },
-               "CreateInvoice",
-               "Creates a new invoice for the given customer");
-       }
+       yield return AIFunctionFactory.Create(
+           typeof(InvoiceApiService).GetMethod(nameof(InvoiceApiService.NewMethod))!,
+           invoiceApiService,
+           new AIFunctionFactoryOptions
+           {
+               Name = "tool_name",
+               Description = "What this tool does"
+           });
 
-  3. The tools are automatically passed to ChatOptions and made available
+  4. The tool is automatically passed to ChatOptions and made available
      to the AI model for function calling.
 
 ================================================================================
-10. CHANGELOG
+12. CHANGELOG
 ================================================================================
+
+  [Update 3 - Invoice Model, Service & Tool Registration]
+  - Added Model/Invoice.cs with Invoice data model containing:
+      * Id, Description, Amount, Date, Status, Due properties
+      * Uses "required" modifier for mandatory fields
+  - Added Services/InvoiceApiService.cs:
+      * HTTP client service targeting http://localhost:5000/api/invoices
+      * GetInvoicesAsync() - retrieves all invoices
+      * GetInvoiceByNameAsync(string) - finds invoice by description
+      * Uses System.Text.Json with camelCase naming policy
+  - Updated FunctionRegistry.cs:
+      * Resolves InvoiceApiService from DI
+      * Registers "list_invoices" tool backed by GetInvoicesAsync()
+      * Registers "find_invoice_by_name" tool backed by
+        GetInvoiceByNameAsync(string)
+      * Tools created via AIFunctionFactory.Create() with reflection
+  - Updated Startup.cs:
+      * Registered InvoiceApiService as singleton in DI
+      * Added using directive: InvoiceAgentApi.Services
+  - Updated SystemPrompt.txt:
+      * Added instruction for agent to use available tools to read invoices
 
   [Update 2 - Program.cs]
   - Wired up Startup.ConfigureServices call with provider and model args

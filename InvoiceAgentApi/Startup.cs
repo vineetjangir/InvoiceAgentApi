@@ -1,5 +1,6 @@
 ﻿using Anthropic.SDK;
 using GeminiDotnet.Extensions.AI;
+using InvoiceAgentApi.Services;
 using Microsoft.Extensions.AI;
 
 namespace InvoiceAgentApi
@@ -55,6 +56,8 @@ namespace InvoiceAgentApi
                 Temperature = 1,
                 MaxOutputTokens = 5000
             });
+
+            builder.Services.AddSingleton<InvoiceApiService>();
         }
     }
 }

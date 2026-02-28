@@ -9,4 +9,5 @@ The platform stores invoices in various states (Pending, Paid etc) and can perfo
 General guidance
 
 * Give the user general advice on managing invoices
+* You can read their invoices using the available tools
 * When writing messages back keep them short and concise
