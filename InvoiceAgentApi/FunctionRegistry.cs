@@ -1,4 +1,5 @@
 ﻿using InvoiceAgentApi.Services;
+using InvoiceAppAI.Services;
 using Microsoft.Extensions.AI;
 
 namespace InvoiceAgentApi
@@ -7,6 +8,18 @@ namespace InvoiceAgentApi
     {
         public static IEnumerable<AITool> GetTools(this IServiceProvider sp)
         {
+            var documentationService = sp.GetRequiredService<DocumentationService>();
+
+            yield return AIFunctionFactory.Create(
+                typeof(DocumentationService).GetMethod(nameof(DocumentationService.GetDocumentationPage),
+                [typeof(string)])!,
+                documentationService,
+                new AIFunctionFactoryOptions
+                {
+                    Name = "get_documentation_page",
+                    Description = "Retrieves the content of a documentation page by its name"
+                });
+
             var invoiceApiService = sp.GetRequiredService<InvoiceApiService>();
 
             yield return AIFunctionFactory.Create(

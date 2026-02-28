@@ -58,6 +58,7 @@ namespace InvoiceAgentApi
             });
 
             builder.Services.AddSingleton<InvoiceApiService>();
+            builder.Services.AddSingleton<DocumentationService>();
         }
     }
 }

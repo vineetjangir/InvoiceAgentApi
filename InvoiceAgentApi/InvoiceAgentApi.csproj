@@ -15,6 +15,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<None Include="Docs\**\*.md">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
 		<None Include="SystemPrompt.txt">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
