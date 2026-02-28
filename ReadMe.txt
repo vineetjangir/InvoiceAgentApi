@@ -3,7 +3,7 @@
 ================================================================================
 
 Project Name    : InvoiceAgentAI (InvoiceAgentApi)
-Framework       : .NET 8 (ASP.NET Core Web API)
+Framework       : .NET 8 (ASP.NET Core Web API), C# 12.0
 Repository      : https://github.com/vineetjangir/InvoiceAgentApi
 Branch          : master
 
@@ -40,6 +40,24 @@ Supported invoice operations:
     unified abstraction over multiple AI providers. This enables easy
     swapping of providers without changing application logic.
 
+  * Chat Endpoint (POST /chat)
+    ---------------------------------------------------------
+    Exposes a POST endpoint at /chat that accepts a list of ChatMessage
+    objects. The endpoint:
+      1. Prepends the system prompt (loaded from SystemPrompt.txt) along
+         with the current date/time to the conversation.
+      2. Sends the full message history to the configured AI provider.
+      3. Returns the AI response as JSON.
+
+    Request body : List<ChatMessage>  (conversation history)
+    Response     : ChatResponse (AI-generated reply)
+
+  * System Prompt with Dynamic Date Injection
+    ---------------------------------------------------------
+    The SystemPrompt.txt file is loaded once at startup from the output
+    directory. On every /chat request, the current date/time is appended
+    to the system prompt so the AI agent is always aware of today's date.
+
   * Function Invocation Pipeline
     ---------------------------------------------------------
     The ChatClientBuilder pipeline includes:
@@ -70,14 +88,6 @@ Supported invoice operations:
       - GEMINI_API_KEY
       - CLAUDE_API_KEY
 
-  * System Prompt
-    ---------------------------------------------------------
-    A SystemPrompt.txt file defines the agent's personality and behavior.
-    It instructs the agent to:
-      - Assist users with invoice management on "InvoiceApp"
-      - Provide short, concise responses
-      - Give general advice on managing invoices
-
 ================================================================================
 3. PROJECT STRUCTURE
 ================================================================================
@@ -86,8 +96,10 @@ Supported invoice operations:
   |
   |-- Program.cs                  Main entry point. Configures CORS, Kestrel
   |                               (port 5001), loads .env, parses CLI args
-  |                               for --provider and --model, and calls
-  |                               Startup.ConfigureServices.
+  |                               for --provider and --model, calls
+  |                               Startup.ConfigureServices, loads the system
+  |                               prompt, builds the app, and registers the
+  |                               POST /chat endpoint.
   |
   |-- Startup.cs                  Registers AI services (IChatClient) with DI.
   |                               Configures logging, builds the chat client
@@ -152,7 +164,28 @@ Supported invoice operations:
   The API listens on port 5001 (all interfaces) by default.
 
 ================================================================================
-7. CONFIGURATION DETAILS
+7. API ENDPOINTS
+================================================================================
+
+  POST /chat
+  -----------
+  Description : Send a conversation to the AI agent and receive a response.
+  Request Body: JSON array of ChatMessage objects (conversation history).
+  Behavior    :
+      1. The system prompt from SystemPrompt.txt is prepended as the first
+         message with the current date/time appended.
+      2. The full message list is sent to the configured AI provider.
+      3. The AI response is returned as a 200 OK JSON result.
+  Example     :
+      POST http://localhost:5001/chat
+      Content-Type: application/json
+
+      [
+        { "role": "user", "content": "Create an invoice for John Doe" }
+      ]
+
+================================================================================
+8. CONFIGURATION DETAILS
 ================================================================================
 
   * Kestrel is configured to listen on 0.0.0.0:5001.
@@ -161,9 +194,10 @@ Supported invoice operations:
       - Temperature : 1
       - MaxOutputTokens : 5000
   * Logging is set to Information level with Console output.
+  * System prompt is loaded once from SystemPrompt.txt at app startup.
 
 ================================================================================
-8. EXTENDING THE AGENT WITH TOOLS
+9. EXTENDING THE AGENT WITH TOOLS
 ================================================================================
 
   To add new tools the agent can invoke during conversation:
@@ -183,8 +217,20 @@ Supported invoice operations:
      to the AI model for function calling.
 
 ================================================================================
-9. CHANGELOG
+10. CHANGELOG
 ================================================================================
+
+  [Update 2 - Program.cs]
+  - Wired up Startup.ConfigureServices call with provider and model args
+  - Added system prompt loading from SystemPrompt.txt at startup
+  - Registered the POST /chat endpoint with the following behavior:
+      * Injects current date/time into the system prompt on each request
+      * Prepends the system prompt as a System ChatMessage
+      * Concatenates user-supplied conversation history
+      * Calls chatClient.GetResponseAsync with registered ChatOptions
+      * Returns the AI response as 200 OK
+  - Added app.UseCors("AllowLocalhost") to the middleware pipeline
+  - Added using directives: InvoiceAgentApi, Microsoft.Extensions.AI
 
   [Initial Release]
   - Set up .NET 8 ASP.NET Core Web API project
