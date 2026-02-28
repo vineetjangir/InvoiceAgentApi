@@ -40,8 +40,3 @@ for(int i = 0; i < args.Length; i++)
     if (args[i] == "--model" && i+1 < args.Length)
         model = args[i+1];
 }
-var app = builder.Build();
-
-app.UseHttpsRedirection();
-
-app.Run();
