@@ -1,4 +1,4 @@
-﻿namespace InvoiceAppAI.Model
+﻿namespace InvoiceAgentApi.Model
 {
     public class Invoice
     {

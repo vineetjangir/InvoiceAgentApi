@@ -23,8 +23,11 @@ Supported invoice operations:
   - Marking an invoice as paid
   - Listing all invoices
 
+The agent also provides contextual help by retrieving documentation pages
+for the InvoiceApp UI, guiding users on how to use the platform themselves.
+
 The agent communicates with a backend Invoice API (http://localhost:5000)
-to retrieve and query invoice data.
+to retrieve, create, and update invoice data.
 
 ================================================================================
 2. KEY FEATURES
@@ -61,8 +64,10 @@ to retrieve and query invoice data.
     The SystemPrompt.txt file is loaded once at startup from the output
     directory. On every /chat request, the current date/time is appended
     to the system prompt so the AI agent is always aware of today's date.
-    The prompt also instructs the agent to use available tools to read
-    invoice data.
+    The prompt instructs the agent to:
+      - Perform invoice actions using registered tools
+      - Retrieve documentation pages to help users navigate the UI
+      - Keep responses short and concise
 
   * Function Invocation Pipeline
     ---------------------------------------------------------
@@ -75,7 +80,7 @@ to retrieve and query invoice data.
   * Tool / Function Registry (AI Function Calling)
     ---------------------------------------------------------
     FunctionRegistry.cs registers AI tools that the agent can invoke
-    during a conversation. Two tools are currently registered:
+    during a conversation. Five tools are currently registered:
 
       1. list_invoices
          - Retrieves a list of all invoices in the system.
@@ -85,14 +90,31 @@ to retrieve and query invoice data.
          - Finds an invoice matching the given name/description.
          - Backed by InvoiceApiService.GetInvoiceByNameAsync(string)
 
-    Tools are created via AIFunctionFactory.Create() using reflection
-    on InvoiceApiService methods and are automatically injected into
-    ChatOptions for the AI model to call.
+      3. create_invoice
+         - Creates a new invoice and returns the created invoice object.
+         - Backed by InvoiceApiService.CreateInvoice(CreateInvoiceRequest)
+         - Accepts description, amount, and optional due date.
+         - Defaults status to "Pending" and due date to 30 days from now.
 
-  * Invoice Data Model
+      4. mark_invoice_as_paid
+         - Marks the invoice with the given ID as paid.
+         - Backed by InvoiceApiService.MarkAsPaid(string)
+
+      5. get_documentation_page
+         - Retrieves the content of a documentation page by name.
+         - Backed by DocumentationService.GetDocumentationPage(string)
+         - Available pages: getting-started, viewing-invoices,
+           creating-invoices, managing-invoices
+
+    Tools are created via AIFunctionFactory.Create() using reflection
+    and are automatically injected into ChatOptions for the AI model
+    to call.
+
+  * Invoice Data Models
     ---------------------------------------------------------
-    The Invoice model (InvoiceAppAI.Model.Invoice) represents an
-    invoice entity with the following properties:
+    Three models in InvoiceAgentApi.Model:
+
+    Invoice:
       - Id          (int)       - Unique identifier
       - Description (string)    - Invoice description / name
       - Amount      (decimal)   - Invoice amount
@@ -100,15 +122,38 @@ to retrieve and query invoice data.
       - Status      (string)    - e.g., "Paid", "Unpaid", "Overdue"
       - Due         (DateTime)  - Payment due date
 
+    CreateInvoiceRequest:
+      - Description (string)    - Required. Invoice description.
+      - Amount      (decimal)   - Required. Invoice amount.
+      - Due         (DateTime?) - Optional. Defaults to 30 days from now.
+
+    UpdateInvoiceRequest:
+      - Status      (string)    - Required. New status value.
+
   * Invoice API Service
     ---------------------------------------------------------
     InvoiceApiService (InvoiceAgentApi.Services) is an HTTP client
     service that communicates with the backend Invoice API at
     http://localhost:5000/api/invoices. It provides:
-      - GetInvoicesAsync()              : GET all invoices
-      - GetInvoiceByNameAsync(string)   : GET invoice by description
+      - GetInvoicesAsync()                       : GET all invoices
+      - GetInvoiceByNameAsync(string)            : GET invoice by description
+      - CreateInvoice(CreateInvoiceRequest)      : POST create new invoice
+      - MarkAsPaid(string)                       : POST update invoice status
     Uses System.Text.Json with camelCase naming policy for
     serialization/deserialization.
+
+  * Documentation Service
+    ---------------------------------------------------------
+    DocumentationService (InvoiceAgentApi.Services) reads markdown
+    documentation pages from the Docs/ directory at runtime. The agent
+    can retrieve these pages via the get_documentation_page tool to
+    provide UI guidance to users.
+
+    Available documentation pages (Docs/*.md):
+      - getting-started    : Basic overview of the platform
+      - viewing-invoices   : How to view invoices in the UI
+      - creating-invoices  : How to create an invoice
+      - managing-invoices  : How to make changes to invoices
 
   * CORS Policy for Local Development
     ---------------------------------------------------------
@@ -139,21 +184,28 @@ to retrieve and query invoice data.
                                         │                  │
                                         │  FunctionRegistry│
                                         │    ├ list_invoices
-                                        │    └ find_invoice_by_name
-                                        └───────┬──────────┘
-                                                │ HTTP
-                                                v
-                                        ┌──────────────────┐
-                                        │  Invoice API     │
-                                        │  (port 5000)     │
-                                        │  /api/invoices   │
-                                        └──────────────────┘
+                                        │    ├ find_invoice_by_name
+                                        │    ├ create_invoice
+                                        │    ├ mark_invoice_as_paid
+                                        │    └ get_documentation_page
+                                        └──────┬─────┬─────┘
+                                               │     │
+                                   HTTP calls  │     │ Local file
+                                               │     │ reads
+                                               v     v
+                                 ┌────────────────┐ ┌──────────┐
+                                 │  Invoice API   │ │  Docs/   │
+                                 │  (port 5000)   │ │  *.md    │
+                                 │  /api/invoices │ │  files   │
+                                 └────────────────┘ └──────────┘
 
   Flow:
   1. Client sends conversation history to POST /chat.
   2. InvoiceAgentApi prepends system prompt and forwards to AI provider.
-  3. AI provider may invoke registered tools (list_invoices,
-     find_invoice_by_name) which call the backend Invoice API.
+  3. AI provider may invoke registered tools:
+     - list_invoices, find_invoice_by_name, create_invoice,
+       mark_invoice_as_paid → call the backend Invoice API via HTTP.
+     - get_documentation_page → reads a local markdown file from Docs/.
   4. Tool results are fed back to the AI to compose a final response.
   5. The response is returned to the client.
 
@@ -174,23 +226,42 @@ to retrieve and query invoice data.
   |                               Configures logging, builds the chat client
   |                               pipeline with logging and function invocation
   |                               middleware. Registers ChatOptions with tools.
-  |                               Registers InvoiceApiService as a singleton.
+  |                               Registers InvoiceApiService and
+  |                               DocumentationService as singletons.
   |
   |-- FunctionRegistry.cs         Static class exposing GetTools() to register
-  |                               AI tools backed by InvoiceApiService methods.
-  |                               Currently registers: list_invoices and
-  |                               find_invoice_by_name.
+  |                               AI tools backed by InvoiceApiService and
+  |                               DocumentationService methods. Registers:
+  |                               list_invoices, find_invoice_by_name,
+  |                               create_invoice, mark_invoice_as_paid, and
+  |                               get_documentation_page.
   |
   |-- Model/
   |   |-- Invoice.cs              Data model representing an invoice entity
   |                               with Id, Description, Amount, Date, Status,
   |                               and Due properties.
+  |   |-- CreateInvoiceRequest.cs Request model for creating a new invoice.
+  |                               Contains Description, Amount, and optional
+  |                               Due date.
+  |   |-- UpdateInvoiceRequest.cs Request model for updating invoice status.
+  |                               Contains Status field.
   |
   |-- Services/
   |   |-- InvoiceApiService.cs    HTTP client service that communicates with
   |                               the backend Invoice API at localhost:5000.
-  |                               Provides GetInvoicesAsync() and
-  |                               GetInvoiceByNameAsync(string) methods.
+  |                               Provides GetInvoicesAsync(),
+  |                               GetInvoiceByNameAsync(string),
+  |                               CreateInvoice(CreateInvoiceRequest), and
+  |                               MarkAsPaid(string) methods.
+  |   |-- DocumentationService.cs Service that reads markdown documentation
+  |                               pages from the Docs/ output directory.
+  |                               Provides GetDocumentationPage(string).
+  |
+  |-- Docs/
+  |   |-- getting-started.md      Basic overview of the InvoiceApp platform
+  |   |-- viewing-invoices.md     Instructions on viewing invoices in the UI
+  |   |-- creating-invoices.md    Instructions on creating invoices
+  |   |-- managing-invoices.md    Instructions on managing/editing invoices
   |
   |-- SystemPrompt.txt            Plain-text system prompt loaded at runtime
   |                               to define the agent's instructions and role.
@@ -200,7 +271,8 @@ to retrieve and query invoice data.
   |   |-- launchSettings.json     Launch profiles for Development (HTTP, HTTPS,
   |                               IIS Express).
   |
-  |-- InvoiceAgentApi.csproj      Project file targeting net8.0.
+  |-- InvoiceAgentApi.csproj      Project file targeting net8.0. Includes
+  |                               Docs/**/*.md files for copy to output.
   |
   |-- .env                        (User-created) Environment variables file
   |                               containing API keys. Not committed to source.
@@ -232,7 +304,7 @@ to retrieve and query invoice data.
       CLAUDE_API_KEY=your-claude-key
 
   - Backend Invoice API running at http://localhost:5000
-    (required for the AI tools to retrieve invoice data)
+    (required for the AI tools to retrieve and modify invoice data)
 
 ================================================================================
 7. HOW TO RUN
@@ -267,9 +339,10 @@ to retrieve and query invoice data.
          message with the current date/time appended.
       2. The full message list is sent to the configured AI provider.
       3. The AI may invoke registered tools (list_invoices,
-         find_invoice_by_name) to fetch data from the backend Invoice API.
+         find_invoice_by_name, create_invoice, mark_invoice_as_paid,
+         get_documentation_page) to perform actions or fetch data.
       4. The AI response is returned as a 200 OK JSON result.
-  Example     :
+  Examples    :
       POST http://localhost:5001/chat
       Content-Type: application/json
 
@@ -277,15 +350,34 @@ to retrieve and query invoice data.
         { "role": "user", "content": "Show me all invoices" }
       ]
 
+      [
+        { "role": "user", "content": "Create an invoice for Web Design, $500" }
+      ]
+
+      [
+        { "role": "user", "content": "How do I create an invoice in the UI?" }
+      ]
+
 ================================================================================
 9. REGISTERED AI TOOLS
 ================================================================================
 
-  Tool Name              Method                              Description
-  ---------------------  ----------------------------------  ----------------------
-  list_invoices          InvoiceApiService.GetInvoicesAsync   Retrieves all invoices
-  find_invoice_by_name   InvoiceApiService.GetInvoiceByName   Finds invoice by name
-                         Async(string)
+  Tool Name                Method                              Description
+  -----------------------  ----------------------------------  ----------------------
+  list_invoices            InvoiceApiService                   Retrieves all invoices
+                           .GetInvoicesAsync()
+
+  find_invoice_by_name     InvoiceApiService                   Finds invoice by name
+                           .GetInvoiceByNameAsync(string)
+
+  create_invoice           InvoiceApiService                   Creates a new invoice
+                           .CreateInvoice(CreateInvoiceRequest)
+
+  mark_invoice_as_paid     InvoiceApiService                   Marks invoice as paid
+                           .MarkAsPaid(string)
+
+  get_documentation_page   DocumentationService                Retrieves a docs page
+                           .GetDocumentationPage(string)       by name from Docs/
 
   These tools are resolved from FunctionRegistry.GetTools() and injected
   into ChatOptions. The AI model can call them automatically during a
@@ -304,6 +396,8 @@ to retrieve and query invoice data.
   * Logging is set to Information level with Console output.
   * System prompt is loaded once from SystemPrompt.txt at app startup.
   * InvoiceApiService is registered as a singleton in DI.
+  * DocumentationService is registered as a singleton in DI.
+  * Docs/**/*.md files are copied to output directory on build.
 
 ================================================================================
 11. EXTENDING THE AGENT WITH TOOLS
@@ -311,13 +405,15 @@ to retrieve and query invoice data.
 
   To add new tools the agent can invoke during conversation:
 
-  1. Add a new method to InvoiceApiService (or create a new service).
+  1. Add a new method to InvoiceApiService, DocumentationService,
+     or create a new service.
   2. Register the service in Startup.ConfigureServices if new.
   3. Open FunctionRegistry.cs and yield return a new AITool:
 
        yield return AIFunctionFactory.Create(
-           typeof(InvoiceApiService).GetMethod(nameof(InvoiceApiService.NewMethod))!,
-           invoiceApiService,
+           typeof(MyService).GetMethod(nameof(MyService.MyMethod),
+           [typeof(ParamType)])!,
+           myServiceInstance,
            new AIFunctionFactoryOptions
            {
                Name = "tool_name",
@@ -330,6 +426,47 @@ to retrieve and query invoice data.
 ================================================================================
 12. CHANGELOG
 ================================================================================
+
+  [Update 4 - Create/Update Invoice, Documentation Service & Pages]
+  - Added Model/CreateInvoiceRequest.cs:
+      * Request model with Description (required), Amount (required),
+        and Due (optional, defaults to 30 days from now)
+  - Added Model/UpdateInvoiceRequest.cs:
+      * Request model with Status field (e.g., "Paid", "Unpaid", "Overdue")
+  - Updated Model/Invoice.cs:
+      * Moved namespace from InvoiceAppAI.Model to InvoiceAgentApi.Model
+  - Updated Services/InvoiceApiService.cs:
+      * Added CreateInvoice(CreateInvoiceRequest) method:
+        - POSTs a new invoice to the backend API
+        - Sets default status to "Pending"
+        - Defaults Due date to 30 days from now if not provided
+      * Added MarkAsPaid(string invoiceId) method:
+        - POSTs status update to /api/invoices/{id}/status
+        - Sets status to "Paid" via UpdateInvoiceRequest
+  - Added Services/DocumentationService.cs:
+      * Reads markdown files from Docs/ directory in output folder
+      * GetDocumentationPage(string pageName) returns file content
+      * Uses Path.GetFileName() for safe file path handling
+  - Added Docs/ folder with markdown documentation pages:
+      * getting-started.md, viewing-invoices.md, creating-invoices.md,
+        managing-invoices.md
+  - Updated FunctionRegistry.cs:
+      * Resolves DocumentationService from DI
+      * Registers "get_documentation_page" tool backed by
+        DocumentationService.GetDocumentationPage(string)
+      * Registers "create_invoice" tool backed by
+        InvoiceApiService.CreateInvoice(CreateInvoiceRequest)
+      * Registers "mark_invoice_as_paid" tool backed by
+        InvoiceApiService.MarkAsPaid(string)
+      * Total registered tools: 5 (was 2)
+  - Updated Startup.cs:
+      * Registered DocumentationService as singleton in DI
+  - Updated SystemPrompt.txt:
+      * Changed agent role to "controls an invoicing platform"
+      * Added documentation page retrieval instructions
+      * Listed four available documentation pages
+  - Updated InvoiceAgentApi.csproj:
+      * Added Docs/**/*.md glob for copy to output directory
 
   [Update 3 - Invoice Model, Service & Tool Registration]
   - Added Model/Invoice.cs with Invoice data model containing:

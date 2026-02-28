@@ -1,4 +1,4 @@
-﻿namespace InvoiceAppAI.Services
+﻿namespace InvoiceAgentApi.Services
 {
     public class DocumentationService
     {
